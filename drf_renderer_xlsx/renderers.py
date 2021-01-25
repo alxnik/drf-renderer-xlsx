@@ -3,6 +3,7 @@ import json
 from collections.abc import MutableMapping, Iterable
 from openpyxl import Workbook
 from openpyxl.styles import PatternFill, Border, Side, Alignment, Font, NamedStyle
+from openpyxl.cell import WriteOnlyCell
 from openpyxl.drawing.image import Image
 from openpyxl.utils import get_column_letter
 from openpyxl.writer.excel import save_virtual_workbook
@@ -84,42 +85,50 @@ class XLSXRenderer(BaseRenderer):
         if data is None:
             return bytes()
 
-        wb = Workbook()
-        self.ws = wb.active
+        wb = Workbook(write_only=True)
+        self.ws = wb.create_sheet()
 
         results = data["results"] if "results" in data else data
 
-        # Take header and column_header params from view
-        header = get_attribute(renderer_context["view"], "header", {})
-        self.ws.title = header.get("tab_title", "Report")
-        header_title = header.get("header_title", "Report")
+        # Retrieve the configuration parameters from the view
+        header = get_attribute(renderer_context["view"], "xlsx_header", {})
+        column_header = get_attribute(renderer_context["view"], "xlsx_column_header", {})
+        self.body = get_attribute(renderer_context["view"], "xlsx_body", {})
+
+        header_style = get_style_from_dict(header.get("style"), "header_style")
+        column_header_style = get_style_from_dict(column_header.get("style"),
+                                                  "column_header_style")
+
+        self.body_style = get_style_from_dict(self.body.get("style"), "body_style")
+
         img_addr = header.get("img")
         if img_addr:
             img = Image(img_addr)
             self.ws.add_image(img, "A1")
-        header_style = get_style_from_dict(header.get("style"), "header_style")
 
-        column_header = get_attribute(renderer_context["view"], "column_header", {})
-        column_header_style = get_style_from_dict(
-            column_header.get("style"), "column_header_style"
-        )
+        self.ws.title = header.get("tab_title", "Report")
+        header_title = header.get("header_title", "Report")
 
         column_count = 0
-        row_count = 1
+
+        # Set the header row
         if header:
-            row_count += 1
+            cell = WriteOnlyCell(self.ws, value=header_title)
+            cell.style = header_style
+            self.ws.append([cell])
+
+
         # Make column headers
         column_titles = column_header.get("titles", [])
 
         # If we have results, pull the columns names from the keys of the first row
         if len(results):
-            if isinstance(results, ReturnDict):
+            if isinstance(results, (ReturnDict, dict)):
                 column_names_first_row = results
-            elif isinstance(results, ReturnList) or type(results) is list:
+            elif isinstance(results, (ReturnList, list)):
                 column_names_first_row = self._flatten(results[0])
-            elif type(results) is dict:
-                column_names_first_row = results
 
+            column_header_row = []
             for column_name in column_names_first_row.keys():
                 if column_name == "row_color":
                     continue
@@ -129,50 +138,30 @@ class XLSXRenderer(BaseRenderer):
                 else:
                     column_name_display = column_titles[column_count - 1]
 
-                self.ws.cell(
-                    row=row_count, column=column_count, value=column_name_display
-                ).style = column_header_style
-            self.ws.row_dimensions[row_count].height = column_header.get("height", 45)
+                cell = WriteOnlyCell(self.ws, value=column_name_display)
+                cell.style = column_header_style
 
-        # Set the header row
-        if header:
-            last_col_letter = "G"
-            if column_count:
-                last_col_letter = get_column_letter(column_count)
-            self.ws.merge_cells("A1:{}1".format(last_col_letter))
+                column_header_row.append(cell)
 
-            cell = self.ws.cell(row=1, column=1, value=header_title)
-            cell.style = header_style
-            self.ws.row_dimensions[1].height = header.get("height", 45)
-
-        # Set column width
-        column_width = column_header.get("column_width", 20)
-        if isinstance(column_width, list):
-            for i, width in enumerate(column_width):
-                col_letter = get_column_letter(i + 1)
-                self.ws.column_dimensions[col_letter].width = width
-        else:
-            for self.ws_column in range(1, column_count + 1):
-                col_letter = get_column_letter(self.ws_column)
-                self.ws.column_dimensions[col_letter].width = column_width
+            self.ws.append(column_header_row)
 
         # Make body
-        self.body = get_attribute(renderer_context["view"], "body", {})
-        self.body_style = get_style_from_dict(self.body.get("style"), "body_style")
+
         if isinstance(results, ReturnDict):
-            self._make_body(results, row_count)
-        elif isinstance(results, ReturnList) or type(results) is list:
+            self._make_body(results)
+        elif isinstance(results, (ReturnList, list)):
             for row in results:
-                self._make_body(row, row_count)
-                row_count += 1
+                self._make_body(row)
 
         return save_virtual_workbook(wb)
+
 
     def _check_validatation_data(self, data):
         detail_key = "detail"
         if detail_key in data:
             return False
         return True
+
 
     def _flatten(self, data, parent_key="", key_sep=".", list_sep=", "):
         items = []
@@ -192,26 +181,29 @@ class XLSXRenderer(BaseRenderer):
                 items.append((new_key, v))
         return dict(items)
 
+
     def _json_format_response(self, response_data):
         return json.dumps(response_data)
 
-    def _make_body(self, row, row_count):
-        column_count = 0
-        row_count += 1
+
+    def _make_body(self, row):
+
         flatten_row = self._flatten(row)
+
+        if "row_color" in row:
+            fill = PatternFill(fill_type="solid", start_color=row["row_color"])
+        else:
+            fill = None
+
+        data_row = []
         for column_name, value in flatten_row.items():
             if column_name == "row_color":
                 continue
-            column_count += 1
-            cell = self.ws.cell(row=row_count, column=column_count, value=value)
+
+            cell = WriteOnlyCell(self.ws, value=value)
             cell.style = self.body_style
-        self.ws.row_dimensions[row_count].height = self.body.get("height", 40)
-        if "row_color" in row:
-            last_letter = get_column_letter(column_count)
-            cell_range = self.ws[
-                "A{}".format(row_count) : "{}{}".format(last_letter, row_count)
-            ]
-            fill = PatternFill(fill_type="solid", start_color=row["row_color"])
-            for r in cell_range:
-                for c in r:
-                    c.fill = fill
+            if fill:
+                cell.fill = fill
+            data_row.append(cell)
+
+        self.ws.append(data_row)
