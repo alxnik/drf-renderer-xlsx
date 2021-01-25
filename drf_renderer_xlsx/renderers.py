@@ -34,7 +34,7 @@ def get_style_from_dict(style_dict, style_name):
     """
     style = NamedStyle(name=style_name)
     if not style_dict:
-        return style
+        return None
     for key, value in style_dict.items():
         if key == "font":
             style.font = Font(**value)
@@ -114,7 +114,8 @@ class XLSXRenderer(BaseRenderer):
         # Set the header row
         if header:
             cell = WriteOnlyCell(self.ws, value=header_title)
-            cell.style = header_style
+            if header_style:
+                cell.style = header_style
             self.ws.append([cell])
 
 
@@ -139,7 +140,8 @@ class XLSXRenderer(BaseRenderer):
                     column_name_display = column_titles[column_count - 1]
 
                 cell = WriteOnlyCell(self.ws, value=column_name_display)
-                cell.style = column_header_style
+                if column_header_style:
+                    cell.style = column_header_style
 
                 column_header_row.append(cell)
 
@@ -201,7 +203,8 @@ class XLSXRenderer(BaseRenderer):
                 continue
 
             cell = WriteOnlyCell(self.ws, value=value)
-            cell.style = self.body_style
+            if self.body_style:
+                cell.style = self.body_style
             if fill:
                 cell.fill = fill
             data_row.append(cell)
